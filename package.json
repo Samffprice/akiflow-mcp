@@ -13,8 +13,7 @@
   ],
   "scripts": {
     "build": "tsc",
-    "watch": "tsc --watch",
-    "prepare": "npm run build"
+    "watch": "tsc --watch"
   },
   "keywords": [
     "mcp",

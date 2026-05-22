@@ -532,6 +532,21 @@ export class AkiflowClient {
     return Object.values(merged);
   }
 
+  /**
+   * Akiflow's PATCH endpoints return the upserted records wrapped in an
+   * object envelope (e.g. { data: [...] }), not a bare array. Normalize the
+   * response to an array so cache merges and tool responses behave correctly.
+   */
+  private asList<T>(response: any): T[] {
+    if (Array.isArray(response)) return response as T[];
+    if (response && typeof response === "object") {
+      if (Array.isArray(response.data)) return response.data as T[];
+      if (Array.isArray(response.items)) return response.items as T[];
+      if (typeof response.id === "string") return [response as T];
+    }
+    return [];
+  }
+
   private async mergeV5Items<T extends { id?: string }>(
     key: V5CacheKey,
     items: T[],
@@ -714,7 +729,9 @@ export class AkiflowClient {
       ...(task.listId && { listId: task.listId }),
     };
 
-    const result = await this.request<Task[]>("PATCH", this.TASKS_URL, [newTask]);
+    const result = this.asList<Task>(
+      await this.request("PATCH", this.TASKS_URL, [newTask]),
+    );
     await this.mergeV5Items<Task>(
       "tasks",
       result,
@@ -733,7 +750,9 @@ export class AkiflowClient {
       }
       this.validateTask(task);
     }
-    const result = await this.request<Task[]>("PATCH", this.TASKS_URL, tasks);
+    const result = this.asList<Task>(
+      await this.request("PATCH", this.TASKS_URL, tasks),
+    );
     await this.mergeV5Items<Task>(
       "tasks",
       result,
@@ -899,7 +918,9 @@ export class AkiflowClient {
       ...(event.location && { location: event.location }),
     };
 
-    const result = await this.request<Event[]>("PATCH", this.EVENTS_URL, [newEvent]);
+    const result = this.asList<Event>(
+      await this.request("PATCH", this.EVENTS_URL, [newEvent]),
+    );
     await this.mergeV5Items<Event>("events", result, (event) => !!event.deleted_at);
     return result;
   }
@@ -913,7 +934,9 @@ export class AkiflowClient {
         throw new Error("'id' is required for updating an event");
       }
     }
-    const result = await this.request<Event[]>("PATCH", this.EVENTS_URL, events);
+    const result = this.asList<Event>(
+      await this.request("PATCH", this.EVENTS_URL, events),
+    );
     await this.mergeV5Items<Event>("events", result, (event) => !!event.deleted_at);
     return result;
   }
@@ -997,7 +1020,9 @@ export class AkiflowClient {
       global_label_id_updated_at: null,
     };
 
-    const result = await this.request<TimeSlot[]>("PATCH", this.TIME_SLOTS_URL, [newSlot]);
+    const result = this.asList<TimeSlot>(
+      await this.request("PATCH", this.TIME_SLOTS_URL, [newSlot]),
+    );
     await this.mergeV5Items<TimeSlot>("timeSlots", result, (slot) => !!slot.deleted_at);
     return result;
   }
@@ -1011,7 +1036,9 @@ export class AkiflowClient {
         throw new Error("'id' is required for updating a time slot");
       }
     }
-    const result = await this.request<TimeSlot[]>("PATCH", this.TIME_SLOTS_URL, slots);
+    const result = this.asList<TimeSlot>(
+      await this.request("PATCH", this.TIME_SLOTS_URL, slots),
+    );
     await this.mergeV5Items<TimeSlot>("timeSlots", result, (slot) => !!slot.deleted_at);
     return result;
   }
