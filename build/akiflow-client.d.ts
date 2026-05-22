@@ -315,6 +315,7 @@ export declare class AkiflowClient {
     private readonly PROJECTS_URL;
     private readonly TAGS_URL;
     private readonly EVENTS_URL;
+    private readonly EVENTS_WRITE_URL;
     private readonly CALENDARS_URL;
     private readonly TIME_SLOTS_URL;
     private readonly AKI_API_URL;

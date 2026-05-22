@@ -12,6 +12,8 @@ export class AkiflowClient {
     PROJECTS_URL = "https://api.akiflow.com/v5/labels";
     TAGS_URL = "https://api.akiflow.com/v5/tags";
     EVENTS_URL = "https://api.akiflow.com/v5/events";
+    // Event reads use v5 (GET), but writes must POST to the v3 endpoint.
+    EVENTS_WRITE_URL = "https://api.akiflow.com/v3/events";
     CALENDARS_URL = "https://api.akiflow.com/v5/calendars";
     TIME_SLOTS_URL = "https://api.akiflow.com/v5/time_slots";
     AKI_API_URL = "https://aki.akiflow.com/api/v1";
@@ -402,34 +404,45 @@ export class AkiflowClient {
             throw new Error("'end_datetime' is required for creating an event");
         }
         const nowISO = new Date().toISOString();
-        const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+        // Event writes must carry the target calendar's account/origin identity,
+        // so resolve the calendar from the calendar list first.
+        const calendars = await this.getCalendars();
+        const calendar = calendars.data.find((c) => c.id === event.calendar_id);
+        if (!calendar) {
+            throw new Error(`Calendar ${event.calendar_id} not found. Use get-calendars to list valid calendars.`);
+        }
+        if (calendar.read_only) {
+            throw new Error(`Calendar "${calendar.title}" is read-only. Pick a writable calendar.`);
+        }
+        const allDay = event.all_day ?? false;
+        const toUtc = (s) => `${new Date(s).toISOString().slice(0, 19)}.000Z`;
         const newEvent = {
             id: crypto.randomUUID(),
+            title: event.title,
+            description: event.description ?? null,
+            start_time: allDay ? null : toUtc(event.start_datetime),
+            end_time: allDay ? null : toUtc(event.end_datetime),
+            start_date: allDay ? event.start_datetime.split("T")[0] : null,
+            end_date: allDay ? event.end_datetime.split("T")[0] : null,
+            status: "confirmed",
+            start_datetime_tz: calendar.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone,
+            end_datetime_tz: null,
+            creator_id: calendar.origin_id,
+            organizer_id: calendar.origin_id,
             origin_id: null,
-            custom_origin_id: null,
-            connector_id: "google",
-            akiflow_account_id: null,
-            origin_account_id: null,
+            connector_id: calendar.connector_id,
+            akiflow_account_id: calendar.akiflow_account_id,
+            origin_account_id: calendar.origin_account_id,
             recurring_id: null,
             origin_recurring_id: null,
             calendar_id: event.calendar_id,
-            origin_calendar_id: null,
-            creator_id: null,
-            organizer_id: null,
+            origin_calendar_id: calendar.origin_id,
             original_start_time: null,
             original_start_date: null,
-            start_time: event.start_datetime,
-            end_time: event.end_datetime,
-            start_date: event.all_day ? event.start_datetime.split("T")[0] : null,
-            end_date: event.all_day ? event.end_datetime.split("T")[0] : null,
-            start_datetime_tz: timezone,
-            end_datetime_tz: null,
             origin_updated_at: null,
             etag: null,
-            title: event.title,
-            description: event.description ?? null,
             content: { sendUpdates: "all" },
-            attendees: event.attendees ?? null,
+            attendees: event.attendees ?? [],
             recurrence: null,
             recurrence_exception: false,
             declined: false,
@@ -441,17 +454,18 @@ export class AkiflowClient {
             meeting_icon: null,
             meeting_solution: null,
             color: null,
-            calendar_color: null,
+            calendar_color: calendar.color ?? null,
             task_id: null,
             time_slot_id: null,
-            status: "confirmed",
             recurrence_exception_delete: false,
+            recurrence_sync_retry: null,
+            errors: null,
+            global_created_at: null,
             deleted_at: null,
             global_updated_at: nowISO,
-            global_created_at: nowISO,
             ...(event.location && { location: event.location }),
         };
-        const result = this.asList(await this.request("PATCH", this.EVENTS_URL, [newEvent]));
+        const result = this.asList(await this.request("POST", this.EVENTS_WRITE_URL, [newEvent]));
         await this.mergeV5Items("events", result, (event) => !!event.deleted_at);
         return result;
     }
@@ -464,7 +478,45 @@ export class AkiflowClient {
                 throw new Error("'id' is required for updating an event");
             }
         }
-        const result = this.asList(await this.request("PATCH", this.EVENTS_URL, events));
+        // v3 event writes need the full event object, so merge each change over the
+        // cached event. Refresh the cache from the API if any target is missing.
+        await this.syncStore.init();
+        let cached = this.syncStore.getV5State("events").itemsById;
+        if (events.some((e) => !cached[e.id])) {
+            await this.getEvents();
+            cached = this.syncStore.getV5State("events").itemsById;
+        }
+        const nowISO = new Date().toISOString();
+        const toUtc = (s) => `${new Date(s).toISOString().slice(0, 19)}.000Z`;
+        const payload = events.map((e) => {
+            const existing = cached[e.id];
+            if (!existing) {
+                throw new Error(`Event ${e.id} not found. Use get-events to load it before editing.`);
+            }
+            const merged = { ...existing };
+            if (e.title !== undefined)
+                merged.title = e.title;
+            if (e.description !== undefined)
+                merged.description = e.description;
+            if (e.location !== undefined)
+                merged.location = e.location;
+            const allDay = e.all_day ?? merged.all_day ?? false;
+            if (e.start_datetime !== undefined) {
+                merged.start_time = allDay ? null : toUtc(e.start_datetime);
+                merged.start_date = allDay ? e.start_datetime.split("T")[0] : null;
+            }
+            if (e.end_datetime !== undefined) {
+                merged.end_time = allDay ? null : toUtc(e.end_datetime);
+                merged.end_date = allDay ? e.end_datetime.split("T")[0] : null;
+            }
+            // Drop convenience aliases that are not real event columns.
+            delete merged.start_datetime;
+            delete merged.end_datetime;
+            delete merged.all_day;
+            merged.global_updated_at = nowISO;
+            return merged;
+        });
+        const result = this.asList(await this.request("POST", this.EVENTS_WRITE_URL, payload));
         await this.mergeV5Items("events", result, (event) => !!event.deleted_at);
         return result;
     }
