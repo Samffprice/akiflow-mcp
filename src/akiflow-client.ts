@@ -549,6 +549,20 @@ export class AkiflowClient {
     return [];
   }
 
+  /**
+   * Normalize a datetime to a true UTC ISO string. Akiflow's API ignores any
+   * timezone offset on the wire and stores the wall-clock as UTC, so an
+   * offset-aware or local time must be converted to its UTC instant first —
+   * otherwise scheduled times land hours off. Naive datetimes (no offset) are
+   * interpreted in the host's local timezone. Empty input and unparseable
+   * strings pass through unchanged.
+   */
+  private toUtcIso(dt?: string | null): string | null {
+    if (!dt) return dt ?? null;
+    const d = new Date(dt);
+    return isNaN(d.getTime()) ? dt : d.toISOString();
+  }
+
   private async mergeV5Items<T extends { id?: string }>(
     key: V5CacheKey,
     items: T[],
@@ -695,7 +709,7 @@ export class AkiflowClient {
       sorting_label: sorting,
       duration: task.duration ?? 0,
       date: task.date ?? null,
-      datetime: task.datetime ?? null,
+      datetime: this.toUtcIso(task.datetime),
       plan_unit: null,
       plan_period: null,
       tags_ids: task.tags_ids ?? null,
@@ -752,8 +766,12 @@ export class AkiflowClient {
       }
       this.validateTask(task);
     }
+    // Convert any offset-aware/local datetime to its true UTC instant.
+    const normalized = tasks.map((t) =>
+      t.datetime !== undefined ? { ...t, datetime: this.toUtcIso(t.datetime) } : t,
+    );
     const result = this.asList<Task>(
-      await this.request("PATCH", this.TASKS_URL, tasks),
+      await this.request("PATCH", this.TASKS_URL, normalized),
     );
     await this.mergeV5Items<Task>(
       "tasks",
@@ -1067,8 +1085,8 @@ export class AkiflowClient {
     const newSlot = {
       id: crypto.randomUUID(),
       title: slot.title,
-      start_time: slot.start_time,
-      end_time: slot.end_time,
+      start_time: this.toUtcIso(slot.start_time)!,
+      end_time: this.toUtcIso(slot.end_time)!,
       calendar_id: slot.calendar_id,
       start_datetime_tz: timezone,
       status: "confirmed",

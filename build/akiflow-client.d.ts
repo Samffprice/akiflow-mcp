@@ -344,6 +344,15 @@ export declare class AkiflowClient {
      * response to an array so cache merges and tool responses behave correctly.
      */
     private asList;
+    /**
+     * Normalize a datetime to a true UTC ISO string. Akiflow's API ignores any
+     * timezone offset on the wire and stores the wall-clock as UTC, so an
+     * offset-aware or local time must be converted to its UTC instant first —
+     * otherwise scheduled times land hours off. Naive datetimes (no offset) are
+     * interpreted in the host's local timezone. Empty input and unparseable
+     * strings pass through unchanged.
+     */
+    private toUtcIso;
     private mergeV5Items;
     private refreshAkiCollection;
     private mergeAkiItem;
