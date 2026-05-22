@@ -2,6 +2,8 @@
 
 MCP server for Akiflow task management with Meeting Assistant support.
 
+> **This is a fork** of [`shrimpwtf/akiflow-mcp`](https://github.com/shrimpwtf/akiflow-mcp) (npm `@shrimpwtf/mcp-akiflow`) with fixes for broken write operations. See [What this fork fixes](#what-this-fork-fixes). It runs directly via `npx` from this repo — no separate publish step.
+
 ## Features
 
 - Get tasks, events, calendars with filters
@@ -27,14 +29,16 @@ MCP server for Akiflow task management with Meeting Assistant support.
 
 ### 2. Configure MCP
 
-Add to your Claude Desktop config (`~/Library/Application Support/Claude/claude_desktop_config.json`):
+This fork runs straight from GitHub via `npx` (no npm publish needed).
+
+**Claude Desktop** (`~/Library/Application Support/Claude/claude_desktop_config.json`) or **Claude Code** (`~/.claude.json`):
 
 ```json
 {
   "mcpServers": {
     "akiflow": {
       "command": "npx",
-      "args": ["-y", "@shrimpwtf/mcp-akiflow@latest"],
+      "args": ["-y", "github:Samffprice/akiflow-mcp"],
       "env": {
         "AKIFLOW_REFRESH_TOKEN": "your_refresh_token_here"
       }
@@ -42,6 +46,30 @@ Add to your Claude Desktop config (`~/Library/Application Support/Claude/claude_
   }
 }
 ```
+
+For a reproducible, pinned setup, target a specific commit instead of the default branch:
+
+```json
+"args": ["-y", "github:Samffprice/akiflow-mcp#<commit-sha>"]
+```
+
+**Claude Code CLI** one-liner (user scope, available in all projects):
+
+```bash
+claude mcp add akiflow -s user \
+  -e AKIFLOW_REFRESH_TOKEN="your_refresh_token_here" \
+  -- npx -y github:Samffprice/akiflow-mcp
+```
+
+> The compiled `build/` is committed to this repo, so `npx` runs it with no build step. The first launch will `git clone` and install dependencies, which takes a few seconds; subsequent launches are cached.
+
+### What this fork fixes
+
+Upstream `@shrimpwtf/mcp-akiflow@0.3.0` has two write-path bugs that this fork resolves:
+
+1. **All write tools failed with `items is not iterable`.** Akiflow's V5 `PATCH` endpoints return a wrapped envelope (`{ success, message, data: [...] }`), but the code passed the whole object into the cache merge, which expected an array. The write actually succeeded server-side, so retries created duplicates. Fixed by unwrapping the response (`asList()`) at every write site — `add-task`, `edit-task`, `mark-done`, events, and time slots. (Same root cause as upstream PR #1.)
+
+2. **`add-event` / `edit-event` never worked (HTTP 405).** Event writes were sent as `PATCH /v5/events`, but that route is read-only (`GET, HEAD` only). Real event writes go to `POST /v3/events` with a payload carrying the target calendar's identity (`akiflow_account_id`, `origin_account_id`, `origin_calendar_id`, creator/organizer ids, `connector_id`), which the old code left null. This fork resolves the calendar via `get-calendars`, populates those fields, converts times to UTC, and posts to the correct endpoint. Events now create and update and sync to Google Calendar.
 
 ## Sync Model
 
@@ -102,6 +130,34 @@ Get calendar events.
 
 #### `get-calendars`
 Get all calendars with metadata.
+
+#### `add-event`
+Create a calendar event (syncs to the source calendar, e.g. Google).
+- `title` (string, required): Event title
+- `calendar_id` (string, required): Calendar UUID (must be a writable calendar — see `get-calendars`)
+- `start_datetime` (string, required): Start time (ISO 8601, e.g. `2026-05-22T09:00:00-05:00`)
+- `end_datetime` (string, required): End time (ISO 8601)
+- `description` (string): Event description
+- `location` (string): Event location
+- `all_day` (boolean): All-day event
+
+#### `edit-event`
+Edit a calendar event. Changes sync back to the source calendar.
+- `id` (string, required): Event UUID
+- `title`, `description`, `location`, `start_datetime`, `end_datetime`, `all_day` (all optional)
+
+#### `add-time-slot`
+Create a time slot (Akiflow-internal calendar block; does **not** sync to external calendars).
+- `title` (string, required): Time slot title
+- `calendar_id` (string, required): Calendar UUID
+- `start_time` (string, required): Start time (ISO 8601)
+- `end_time` (string, required): End time (ISO 8601)
+- `label_id` (string): Project/label UUID
+
+#### `edit-time-slot`
+Edit a time slot.
+- `id` (string, required): Time slot UUID
+- `title`, `start_time`, `end_time`, `label_id` (all optional)
 
 ### Meeting Assistant
 
